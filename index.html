@@ -36,6 +36,8 @@ button:disabled{opacity:.45;cursor:default}
 .tpl .no{font-size:12px;color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
 .tpl .nm{font-size:15px;font-weight:600;line-height:1.35}
 .tpl .meta{font-size:12px;color:var(--muted)}
+.iab{display:flex;flex-direction:column;gap:10px;padding:14px 16px;border-radius:10px;background:#fff4e5;border:1px solid #f5c98a;color:#5c3300}
+.iab b{font-size:16px}.iab span{font-size:14px;line-height:1.5}.iab .btn{min-height:48px;font-size:16px}
 .upload{border:2px dashed var(--line);border-radius:10px;background:var(--panel);padding:26px 16px;display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center}
 .upload.over{border-color:var(--ink);background:var(--ink-soft)}
 .upload b{font-size:15px}
@@ -105,6 +107,11 @@ button:disabled{opacity:.45;cursor:default}
     <h1>กรอก PDF</h1>
     <p class="lead">เลือกแบบพิมพ์ศาล หรืออัปโหลดไฟล์ PDF ของคุณ แล้วแตะบนเอกสารเพื่อพิมพ์ข้อความ</p>
   </div>
+  <div class="iab" id="iab" hidden>
+    <b id="iabTitle"></b>
+    <span id="iabText"></span>
+    <a class="btn primary" id="iabBtn" hidden>เปิดใน Chrome</a>
+  </div>
   <section>
     <h2 class="sec">แบบพิมพ์ศาล</h2>
     <div class="tpls" id="tpls"></div>
@@ -162,7 +169,7 @@ button:disabled{opacity:.45;cursor:default}
     <button class="primary" id="shShare">บันทึก / แชร์ไฟล์</button>
     <button id="shSave">ดาวน์โหลด</button>
     <a class="btn" id="shOpen" target="_blank" rel="noopener">เปิดดู PDF</a>
-    <p class="tip">ถ้าดาวน์โหลดไม่ขึ้น กด "เปิดดู PDF" แล้วกดปุ่มแชร์หรือบันทึกในหน้าที่เปิดขึ้นมา</p>
+    <p class="tip" id="shTip">ถ้าดาวน์โหลดไม่ขึ้น กด "เปิดดู PDF" แล้วกดปุ่มแชร์หรือบันทึกในหน้าที่เปิดขึ้นมา</p>
     <button id="shClose">ปิด</button>
   </div>
 </div>
@@ -182,7 +189,6 @@ let vpm=document.querySelector('meta[name=viewport]');if(!vpm){vpm=document.crea
 vpm.setAttribute('content','width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover'); // lock browser zoom: the app zooms the pages itself
 ['gesturestart','gesturechange','gestureend'].forEach(t=>document.addEventListener(t,e=>e.preventDefault(),{passive:false})); // iOS Safari ignores user-scalable=no
 document.addEventListener('touchmove',e=>{if(e.touches.length>1&&!e.target.closest('#pages'))e.preventDefault()},{passive:false});
-let lastTouchEnd=0;document.addEventListener('touchend',e=>{const n=Date.now();if(n-lastTouchEnd<300&&!e.target.closest('[contenteditable]'))e.preventDefault();lastTouchEnd=n},{passive:false}); // no double-tap zoom
 const TH_M=['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
 const thaiDate=()=>{const d=new Date();return d.getDate()+' '+TH_M[d.getMonth()]+' '+(d.getFullYear()+543)};
 let toastT;function toast(t){const e=$('toast');e.textContent=t;e.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>e.hidden=true,2600)}
@@ -198,7 +204,7 @@ function buildGallery(){
     const b=document.createElement('button');b.className='tpl';b.type='button';
     b.innerHTML='<div class="th">กำลังโหลด…</div><div class="nm"></div>';
     b.querySelector('.nm').textContent=f.title;
-    b.onclick=()=>openBytes(b64(f.data),f.title,'');
+    b.onclick=()=>openBytes(b64(f.data),f.title,'',i);
     host.append(b);thumb(f,b.querySelector('.th'));
   });
 }
@@ -213,11 +219,11 @@ function showStart(){
 }
 
 /* ---------- load + render ---------- */
-async function openBytes(bytes,name,meta){
+async function openBytes(bytes,name,meta,tpl){
   try{
     S.pdf=await pdfjsLib.getDocument({data:bytes.slice(0)}).promise;
   }catch(e){console.error(e);toast('เปิดไฟล์ไม่ได้ ไฟล์อาจเสียหายหรือมีรหัสผ่าน');return}
-  S.bytes=bytes;S.name=name;S.boxes=[];S.sel=null;S.stamp=null;
+  S.bytes=bytes;S.name=name;S.tpl=(tpl==null?null:tpl);S.boxes=[];S.sel=null;S.stamp=null;
   $('fname').textContent=name;S.zoom=1;
   $('start').hidden=true;$('editor').hidden=false;window.scrollTo(0,0);
   $('pages').innerHTML='<div class="loading">กำลังเปิดเอกสาร…</div>';
@@ -377,18 +383,66 @@ async function buildPdf(){
 }
 let dlApi;const inClaude=!!(window.claude&&window.claude.use);
 const dlReady=inClaude?window.claude.use('downloads').then(a=>dlApi=a).catch(()=>null):Promise.resolve(null);
-const UA=navigator.userAgent,inApp=/Line\/|FBAN|FBAV|FB_IAB|Instagram|MicroMessenger|TikTok/i.test(UA),isLine=/Line\//i.test(UA);
+const UA=navigator.userAgent,isAndroid=/Android/i.test(UA),isLine=/Line\//i.test(UA),
+  isFB=/FBAN|FBAV|FB_IAB|FB4A|FBIOS|Messenger|Instagram/i.test(UA),
+  inApp=isLine||isFB||/MicroMessenger|TikTok|musical_ly|; wv\)/i.test(UA);
+const appName=isLine?'LINE':(/Instagram/i.test(UA)?'Instagram':(/Messenger|FB_IAB\/MESSENGER/i.test(UA)?'Messenger':(isFB?'Facebook':'แอปนี้')));
+/* carry the filled text to the outside browser through the link (works for the built-in court forms) */
+const b64u=str=>btoa(unescape(encodeURIComponent(str))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const ub64=str=>decodeURIComponent(escape(atob(str.replace(/-/g,'+').replace(/_/g,'/'))));
+function stateParam(){
+  if(S.tpl==null||!S.pdf)return '';
+  const b=S.boxes.filter(x=>x.text.trim()).map(x=>[x.p,+x.x.toFixed(1),+x.y.toFixed(1),x.size,x.color,x.font,x.bold?1:0,x.text]);
+  return 's='+b64u(JSON.stringify({t:S.tpl,b}));
+}
+function extUrl(withState){
+  const q=withState?stateParam():'',base=location.origin+location.pathname,https=base+(q?'?'+q:'');
+  if(isLine)return https+(q?'&':'?')+'openExternalBrowser=1';
+  if(isAndroid)return 'intent://'+location.host+location.pathname+(q?'?'+q:'')+'#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url='+encodeURIComponent(https)+';end';
+  return https;
+}
+const iosHow='กดปุ่ม ⋯ มุมขวาบน แล้วเลือก "เปิดในเบราว์เซอร์ภายนอก" หรือ "เปิดใน Safari"';
+/* auto-jump out of Facebook/LINE: Android -> Chrome via intent, LINE (Android+iOS) via its openExternalBrowser flag.
+   noext=1 marks a return from a failed jump (e.g. Chrome not installed) so we never loop. */
+(function(){
+  if(!inApp||inClaude||/[?&](noext|openExternalBrowser)=1/.test(location.search)||/[?&]s=/.test(location.search))return;
+  let tried=false;try{tried=sessionStorage.getItem('extTried')==='1';sessionStorage.setItem('extTried','1')}catch(e){}
+  if(tried)return;
+  const base=location.origin+location.pathname;
+  if(isLine)location.replace(base+'?openExternalBrowser=1');
+  else if(isAndroid)location.href='intent://'+location.host+location.pathname+'#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url='+encodeURIComponent(base+'?noext=1')+';end';
+})();
+if(inApp&&!inClaude){
+  $('iab').hidden=false;$('iabTitle').textContent='กำลังเปิดใน '+appName+' ซึ่งดาวน์โหลดไฟล์ไม่ได้';
+  if(isAndroid||isLine){$('iabText').textContent='เปิดหน้านี้ในเบราว์เซอร์ก่อนเริ่มกรอก จะดาวน์โหลดไฟล์ได้ตามปกติ';$('iabBtn').hidden=false;$('iabBtn').href=extUrl(false);$('iabBtn').textContent=isLine?'เปิดในเบราว์เซอร์':'เปิดใน Chrome'}
+  else $('iabText').textContent='ก่อนเริ่มกรอก '+iosHow;
+}
+(async()=>{ // restore text carried in the link
+  const m=location.search.match(/[?&]s=([^&]+)/);if(!m)return;
+  try{const st=JSON.parse(ub64(m[1]));const f=FORMS[st.t];if(!f)return;
+    await openBytes(b64(f.data),f.title,'',st.t);
+    S.boxes=st.b.map(a=>({id:S.nid++,p:a[0],x:a[1],y:a[2],size:a[3],color:a[4],font:a[5],bold:!!a[6],text:a[7]}));drawBoxes();
+    toast('โหลดข้อความที่กรอกไว้แล้ว กด "ดาวน์โหลด" ได้เลย');
+  }catch(e){console.error(e)}
+  try{history.replaceState(null,'',location.pathname)}catch(e){}
+})();
 let ready=null; // {blob,name,url}
 function openSheet(){
   const f=new File([ready.blob],ready.name,{type:'application/pdf'});
   const canShare=!!(navigator.canShare&&navigator.canShare({files:[f]}));
-  $('shShare').hidden=!canShare;$('shSave').classList.toggle('primary',!canShare);
-  $('shOpen').href=ready.url;
-  $('shName').textContent=ready.name;
+  $('shName').textContent=ready.name;$('shOpen').href=ready.url;
+  const ext=inApp&&(isAndroid||isLine);
+  $('shExt').hidden=!ext;
+  $('shShare').hidden=!canShare;
+  $('shSave').hidden=inApp;$('shOpen').hidden=inApp;$('shTip').hidden=inApp;
+  $('shSave').classList.toggle('primary',!canShare&&!inApp);
+  $('shShare').classList.toggle('primary',!ext);
   let note='';
-  if(inApp){note='แอปที่เปิดหน้านี้อยู่ (เช่น LINE หรือ Facebook) มักบล็อกการดาวน์โหลด ให้เปิดในเบราว์เซอร์ก่อน';$('shExt').hidden=false;
-    $('shExt').href=isLine?(location.href.split('#')[0]+(location.search?'&':'?')+'openExternalBrowser=1'):location.href;}
-  else $('shExt').hidden=true;
+  if(inApp){
+    if(ext){$('shExt').href=extUrl(true);$('shExt').textContent=(isLine?'เปิดในเบราว์เซอร์':'เปิดใน Chrome')+(S.tpl!=null?' พร้อมข้อความที่กรอก':'');
+      note=appName+' ดาวน์โหลดไฟล์ไม่ได้ กดปุ่มด้านล่างเพื่อเปิดใน'+(isLine?'เบราว์เซอร์':' Chrome')+(S.tpl!=null?' ข้อความที่กรอกไว้จะตามไปด้วย แล้วกดดาวน์โหลดอีกครั้ง':' แล้วอัปโหลดไฟล์ PDF อีกครั้ง (ไฟล์ของคุณส่งต่อไปไม่ได้)');}
+    else note=appName+' ดาวน์โหลดไฟล์ไม่ได้ ลองกด "บันทึก / แชร์ไฟล์" ถ้าไม่ได้ให้'+iosHow;
+  }
   $('shNote').textContent=note;$('shNote').hidden=!note;
   $('sheet').hidden=false;
 }
